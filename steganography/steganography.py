@@ -1,31 +1,24 @@
-# -*- coding: utf-8 -*-
-from __future__ import absolute_import, unicode_literals
+# Copyright 2021 Gael Abadin
+# Forked from https://github.com/subc/steganography
+# ( MIT LICENSED on https://github.com/subc/steganography/blob/8ce5ed30ed087c85cdd1a378f8e5cc81154ebcc7/setup.py#L26 )
 
 import sys
 from PIL import Image
 import random
-import binascii
 
 DIST = 8
 
 
-def normalize_pixel(r, g, b):
+def normalize_pixel(rgb):
     """
     pixel color normalize
-    :param r: int
-    :param g: int
-    :param b: int
+    :param rgb: list
     :return: (int, int, int)
     """
-    if is_modify_pixel(r, g, b):
-        seed = random.randint(1, 3)
-        if seed == 1:
-            r = _normalize(r)
-        if seed == 2:
-            g = _normalize(g)
-        if seed == 3:
-            b = _normalize(b)
-    return r, g, b
+    if is_modify_pixel(rgb):
+        seed = random.randint(0, 2)
+        rgb[seed] = _normalize(rgb[seed])
+    return tuple(rgb)
 
 
 def modify_pixel(r, g, b):
@@ -39,14 +32,12 @@ def modify_pixel(r, g, b):
     return map(_modify, [r, g, b])
 
 
-def is_modify_pixel(r, g, b):
+def is_modify_pixel(rgb):
     """
-    :param r: int
-    :param g: int
-    :param b: int
+    :param rgb: list
     :return: bool
     """
-    return r % DIST == g % DIST == b % DIST == 1
+    return rgb[0] % DIST == rgb[1] % DIST == rgb[2] % DIST == 1
 
 
 def _modify(i):
@@ -71,32 +62,17 @@ def _normalize(i):
     return i
 
 
-def normalize(path, output):
-    """
-    normalize image
-    :param path: str
-    :param output: str
-    """
-    img = Image.open(path)
-    img = img.convert('RGB')
-    size = img.size
-    new_img = Image.new('RGB', size)
-
-    for y in range(img.size[1]):
-        for x in range(img.size[0]):
-            r, g, b = img.getpixel((x, y))
-            _r, _g, _b = normalize_pixel(r, g, b)
-            new_img.putpixel((x, y), (_r, _g, _b))
-    new_img.save(output, "PNG", optimize=True)
-
-
-def hide_text(path, text):
+def hide_text(img, path, text, full_normalize=True):
     """
     hide text to image
+    :param img: Image
     :param path: str
     :param text: str
+    :param full_normalize: bool
     """
     text = str(text)
+    if not full_normalize:
+        text += '\0\0\0\0\0\1'
 
     # convert text to hex for write
     write_param = []
@@ -106,66 +82,94 @@ def hide_text(path, text):
         _base += 16
 
     # hide hex-text to image
-    img = Image.open(path)
     counter = 0
+    writes_to_go = len(write_param)
     for y in range(img.size[1]):
         for x in range(img.size[0]):
             if counter in write_param:
-                r, g, b = img.getpixel((x, y))
-                r, g, b = modify_pixel(r, g, b)
-                img.putpixel((x, y), (r, g, b))
+                r, g, b, a = img.getpixel((x, y))
+                _r, _g, _b = normalize_pixel([r, g, b])
+                _r, _g, _b = modify_pixel(_r, _g, _b)
+                img.putpixel((x, y), (_r, _g, _b, a))
+                if not full_normalize:
+                    writes_to_go -= 1
+                    if writes_to_go == 0:
+                        break
+            elif full_normalize:
+                r, g, b, a = img.getpixel((x, y))
+                _r, _g, _b = normalize_pixel([r, g, b])
+                if (_r, _g, _b) != (r, g, b):
+                    img.putpixel((x, y), (_r, _g, _b, a))
             counter += 1
-
+        if writes_to_go == 0:
+            break
     # save
-    img.save(path, "PNG", optimize=True)
+    img.save(path, "PNG")
+
 
 def to_hex(s):
-    return binascii.hexlify(s.encode()).decode()
+    return s.encode().hex()
+
 
 def to_str(s):
-    return binascii.unhexlify(s).decode()
+    return bytes.fromhex(s).decode('utf-8')
 
-def read_text(path):
+
+def read_text(path, full_normalize=True):
     """
     read secret text from image
     :param path: str
+    :param full_normalize: bool
     :return: str
     """
     img = Image.open(path)
     counter = 0
+    terminator_count = 0
     result = []
     for y in range(img.size[1]):
         for x in range(img.size[0]):
-            r, g, b = img.getpixel((x, y))
-            if is_modify_pixel(r, g, b):
+            r, g, b, a = img.getpixel((x, y))
+            if is_modify_pixel([r, g, b]):
                 result.append(counter)
-            counter += 1
-            if counter == 16:
-                counter = 0
+                if not full_normalize:
+                    if counter == 0:
+                        terminator_count += 1
+                    elif counter == 1 and terminator_count >= 11:
+                        break
+                    else:
+                        terminator_count = 0
+            counter = (counter + 1) % 16
+        if not full_normalize and counter == 1 and terminator_count >= 11:
+            break
+    if not full_normalize:
+        result = result[:-12]
     return to_str(''.join([hex(_)[-1:] for _ in result]))
 
 
 class Steganography(object):
     @classmethod
-    def encode(cls, input_image_path, output_image_path, encode_text):
+    def encode(cls, input_image_path, output_image_path, encode_text, full_normalize=True):
         """
         hide text to image
         :param input_image_path: str
         :param output_image_path: str
         :param encode_text: str
+        :param full_normalize: bool
         """
-        normalize(input_image_path, output_image_path)
-        hide_text(output_image_path, encode_text)
-        assert read_text(output_image_path) == encode_text, read_text(output_image_path)
+        img = Image.open(input_image_path)
+        if img.mode != "RGBA":
+            img = img.convert('RGBA')
+        hide_text(img, output_image_path, encode_text, full_normalize)
 
     @classmethod
-    def decode(cls, image_path):
+    def decode(cls, image_path, full_normalize=True):
         """
         read secret text from image
         :param image_path: str
+        :param full_normalize: bool
         :return: str
         """
-        return read_text(image_path)
+        return read_text(image_path, full_normalize)
 
 
 # Main program
@@ -196,6 +200,7 @@ def print_help_text():
     print("# decode example: read secret text from image")
     print("steganography -d /tmp/image/output.jpg")
     print("")
+
 
 if __name__ == "__main__":
     main()
