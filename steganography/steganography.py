@@ -174,19 +174,21 @@ class Steganography(object):
 
 # Main program
 def main():
-    if len(sys.argv) == 5 and sys.argv[1] == '-e':
+    if len(sys.argv) == 5 and (sys.argv[1] == '-e' or sys.argv[1] == '-se'):
         # encode
         print("Start Encode")
         input_image_path = sys.argv[2]
         output_image_path = sys.argv[3]
         text = sys.argv[4]
-        Steganography.encode(input_image_path, output_image_path, text)
+        full_normalize = sys.argv[1] == '-e'
+        Steganography.encode(input_image_path, output_image_path, text, full_normalize)
         print("Finish:{}".format(output_image_path))
         return
-    if len(sys.argv) == 3 and sys.argv[1] == '-d':
+    if len(sys.argv) == 3 and (sys.argv[1] == '-d' or sys.argv[1] == '-sd'):
         # decode
         input_image_path = sys.argv[2]
-        print(Steganography.decode(input_image_path))
+        full_normalize = sys.argv[1] == '-d'
+        print(Steganography.decode(input_image_path, full_normalize))
         return
     print_help_text()
 
@@ -199,6 +201,8 @@ def print_help_text():
     print("")
     print("# decode example: read secret text from image")
     print("steganography -d /tmp/image/output.jpg")
+    print("")
+    print("(For quick encode/decode using partial normalization, use -se/-sd instead)")
     print("")
 
 
